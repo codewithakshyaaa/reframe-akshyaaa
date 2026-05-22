@@ -281,7 +281,10 @@ export async function loadFFmpeg(
   }
 
   const ffmpeg = ffmpegInstance ?? new FFmpeg();
+<<<<<<< HEAD
   ffmpegInstance = ffmpeg;
+=======
+>>>>>>> 23ca446 (fix:internal updates)
 
   // Progress listener is attached here and removed in `finally`.
   // exportVideo attaches its own separate listener for the encode phase.
