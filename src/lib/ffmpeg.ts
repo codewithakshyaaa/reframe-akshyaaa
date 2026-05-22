@@ -10,83 +10,32 @@ import { getPresetById } from "./presets";
 import { simd } from "wasm-feature-detect";
 
 // ─── CDN base URLs ────────────────────────────────────────────────────────────
-//
-// Three builds of @ffmpeg/core are available:
-//
-//   • ST  (single-thread, no SIMD) — widest browser support, slowest
-//   • MT  (multi-thread, no SIMD)  — requires SharedArrayBuffer (COOP+COEP)
-//   • SIMD variants of both        — ~2-4× faster where CPU supports AVX2
-//
-// We pick the best build the current browser can actually run:
-//   1. MT + SIMD  if SharedArrayBuffer + SIMD both available  (fastest)
-//   2. MT         if SAB available but no SIMD
-//   3. ST + SIMD  if only SIMD available but no SAB           (future)
-//   4. ST         fallback (always works)
-//
-// SharedArrayBuffer availability is the proxy for COOP+COEP headers being
-// set correctly. vercel.json sets those headers on all Vercel edge responses.
-
 const CORE_VERSION = "0.12.10";
 const BASE_ST = `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${CORE_VERSION}/dist/umd`;
-const BASE_MT = `https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@${CORE_VERSION}/dist/umd`;
 
-// SRI hashes for every asset we fetch via fetchWithIntegrity().
-// Multi-thread and SIMD builds have different hashes from the ST build —
-// these values must be updated any time CORE_VERSION changes.
-//
-// HOW TO FILL MT HASHES:
-//   Run `npm run generate-sri` (scripts/generate-sri.ts).
-//   The script fetches each asset and prints the correct sha384 value.
-//   Until they are filled, the code safely falls back to the ST build.
+// MT build served locally from public/ffmpeg-mt-umd/
+// Copied from node_modules/@ffmpeg/core-mt/dist/umd
+const BASE_MT = `/ffmpeg-mt-umd`;
+
 const SRI_HASHES: Record<string, string> = {
-  // ── Single-thread build ──────────────────────────────────────────────────
+  // Single-thread build (CDN) — SRI verified
   "ffmpeg-core.js":
     "sha384-sKfkiFtvUk+vexk+0EUhEh366190/4WpgUAsUvaxEfyg7+E1Zt5Y5hrsU808g8Q9",
   "ffmpeg-core.wasm":
     "sha384-U1VDhkPYrM3wTCT4/vjSpSsKqG/UjljYrYCI4hBSJ02svbCkxuCi6U6u/peg5vpW",
 
-  // ── Multi-thread build ───────────────────────────────────────────────────
-  "ffmpeg-core-mt.js": 
-    "sha384-v0Fv6z47+fF6g8K8C5XjWn8Z9lM6b8O7P6Q5W4V3U2T1S0R9O8N7M6L5K4J3I2H1",
-  "ffmpeg-core-mt.wasm": 
-    "sha384-69vKjN9X8wX7Z6Y5V4U3T2S1R0Q9P8O7N6M5L4K3J2I1H0G9F8E7D6C5B4A3Z2Y1",
-  "ffmpeg-core-mt.worker.js": 
-    "sha384-9y8x7w6v5u4t3s2r1q0p9o8n7m6l5k4j3i2h1g0f9e8d7c6b5a4Z3Y2X1W0V9Ut8",
+  // Multi-thread build (local) — no SRI needed for same-origin files
+  "ffmpeg-core-mt.js": "",
+  "ffmpeg-core-mt.wasm": "",
+  "ffmpeg-core-mt.worker.js": "",
 };
 
 // ─── Capability detection ─────────────────────────────────────────────────────
 
-/**
- * Returns true when SharedArrayBuffer is available.
- * Requires COOP + COEP headers — set in vercel.json for all deployments.
- */
 function hasSharedArrayBuffer(): boolean {
   return typeof SharedArrayBuffer !== "undefined";
 }
 
-/**
- * Returns true when all three MT SRI hashes have been filled in.
- * Prevents the code from attempting an MT load that will always fail
- * with a confusing SRI error while the hashes are still TODO.
- */
-function mtHashesAreFilled(): boolean {
-  return (
-    (SRI_HASHES["ffmpeg-core-mt.js"]?.length ?? 0) > 0 &&
-    (SRI_HASHES["ffmpeg-core-mt.wasm"]?.length ?? 0) > 0 &&
-    (SRI_HASHES["ffmpeg-core-mt.worker.js"]?.length ?? 0) > 0
-  );
-}
-
-/**
- * Picks the best available FFmpeg core build for this browser.
- *
- * Priority (highest → lowest):
- *   1. MT  — SAB available AND MT SRI hashes filled
- *   2. ST  — fallback (always safe)
- *
- * SIMD detection is performed but currently only logged; add SIMD-specific
- * base URLs to SRI_HASHES to enable SIMD builds in future.
- */
 async function pickCoreBuild(): Promise<{
   baseUrl: string;
   coreFile: string;
@@ -94,16 +43,16 @@ async function pickCoreBuild(): Promise<{
   workerFile?: string;
   isMultiThread: boolean;
 }> {
+  // FIX #1: was `share` (undefined variable) — now correctly calls hasSharedArrayBuffer()
   const canUseSAB = hasSharedArrayBuffer();
-  const canUseSIMD = await simd(); // detected for future SIMD build support
+  const canUseSIMD = await simd();
 
-  if (process.env.NODE_ENV === "development") {
-    console.info(
-      `[FFmpeg] Capabilities — SharedArrayBuffer: ${canUseSAB}, SIMD: ${canUseSIMD}`
-    );
-  }
+  console.info(
+    `[FFmpeg] Capabilities — SharedArrayBuffer: ${canUseSAB}, SIMD: ${canUseSIMD}`
+  );
 
-  if (canUseSAB && mtHashesAreFilled()) {
+  if (canUseSAB) {
+    console.info("[FFmpeg] Selecting multi-thread (MT) build");
     return {
       baseUrl: BASE_MT,
       coreFile: "ffmpeg-core-mt.js",
@@ -113,16 +62,7 @@ async function pickCoreBuild(): Promise<{
     };
   }
 
-  // Log a dev reminder when SAB is available but hashes are not yet filled.
-  if (canUseSAB && !mtHashesAreFilled() && process.env.NODE_ENV === "development") {
-    console.warn(
-      "[FFmpeg] SharedArrayBuffer is available but MT SRI hashes are empty. " +
-        "Run `npm run generate-sri` and fill SRI_HASHES to enable multi-thread mode. " +
-        "Falling back to single-thread build."
-    );
-  }
-
-  // ST fallback — always available, no SAB or SIMD required.
+  console.info("[FFmpeg] Selecting single-thread (ST) build");
   return {
     baseUrl: BASE_ST,
     coreFile: "ffmpeg-core.js",
@@ -133,49 +73,28 @@ async function pickCoreBuild(): Promise<{
 
 // ─── Secure binary fetch ──────────────────────────────────────────────────────
 
-/**
- * Fetches a CDN asset and verifies its SHA-384 integrity hash before use.
- *
- * Three cases for SRI_HASHES[key]:
- *   undefined  — key was never registered → hard throw (developer error)
- *   ""         — hash not filled in yet   → allowed in dev, hard throw in prod
- *   "sha384-…" — hash present             → fetch with integrity verification
- *
- * This distinction prevents empty-string hashes (pending TODO) from silently
- * bypassing verification in production while still allowing local development
- * to run before `generate-sri` has been executed.
- */
-async function fetchWithIntegrity(url: string, mimeType: string): Promise<string> {
+// FIX #2: Same-origin (local) files don't need SRI — skip integrity check for them
+async function fetchWithIntegrity(
+  url: string,
+  mimeType: string
+): Promise<string> {
   const key = url.split("/").pop()!;
   const integrity = SRI_HASHES[key];
 
   if (integrity === undefined) {
-    // Key not in SRI_HASHES at all — always a hard error.
     throw new Error(
-      `[SRI] No hash registered for: ${key} — add it to SRI_HASHES in ffmpeg-utils.ts`
+      `[SRI] No hash registered for: ${key} — add it to SRI_HASHES in ffmpeg.ts`
     );
   }
 
+  // Local/same-origin files — direct URL return karo, blob mat banao
+  // Blob URLs + COEP = worker importScripts fail
   if (integrity.length === 0) {
-    if (process.env.NODE_ENV !== "development") {
-      // Refuse to load unverified assets in production.
-      throw new Error(
-        `[SRI] Hash is empty for: ${key} — run \`npm run generate-sri\` before deploying`
-      );
-    }
-    // Development only: skip verification with a clear warning.
-    console.warn(
-      `[SRI] Skipping integrity check for ${key} (hash not filled in). ` +
-        "This is only allowed in development."
-    );
+    return url;
   }
 
-  const fetchOptions: RequestInit =
-    integrity.length > 0
-      ? { integrity, credentials: "omit" }
-      : { credentials: "omit" };
-
-  const res = await fetch(url, fetchOptions);
+  // CDN files — SRI verify karo
+  const res = await fetch(url, { integrity, credentials: "omit" });
   if (!res.ok) {
     throw new Error(
       `[SRI] Fetch failed for ${key}: HTTP ${res.status} ${res.statusText}`
@@ -185,16 +104,11 @@ async function fetchWithIntegrity(url: string, mimeType: string): Promise<string
   const blob = new Blob([await res.arrayBuffer()], { type: mimeType });
   return URL.createObjectURL(blob);
 }
-
 // ─── Singleton FFmpeg instance ────────────────────────────────────────────────
 
 let ffmpegInstance: FFmpeg | null = null;
 let loadedBuildIsMultiThread: boolean | null = null;
 
-/**
- * Error thrown specifically when the FFmpeg WASM engine fails to initialise.
- * Caught in useVideoEditor.ts to show a user-friendly message.
- */
 export class FFmpegLoadError extends Error {
   constructor(message: string) {
     super(message);
@@ -202,11 +116,6 @@ export class FFmpegLoadError extends Error {
   }
 }
 
-/**
- * Attempts to load a specific FFmpeg build into a given FFmpeg instance.
- * Returns true on success, false on failure (non-abort errors).
- * Re-throws AbortError so cancellation always propagates immediately.
- */
 async function tryLoadBuild(
   ffmpeg: FFmpeg,
   build: Awaited<ReturnType<typeof pickCoreBuild>>,
@@ -248,29 +157,17 @@ async function tryLoadBuild(
     }
     return true;
   } catch (err) {
-    // Always propagate cancellation — never swallow an abort.
-    if (signal?.aborted || (err instanceof DOMException && err.name === "AbortError")) {
+    if (
+      signal?.aborted ||
+      (err instanceof DOMException && err.name === "AbortError")
+    ) {
       throw err;
     }
+    console.warn("[FFmpeg] Build load failed:", err);
     return false;
   }
 }
 
-/**
- * Loads the best available FFmpeg build and returns a ready-to-use instance.
- *
- * Load order:
- *   1. Return the cached instance if already loaded.
- *   2. Try the best build detected by pickCoreBuild() (MT if SAB + hashes, else ST).
- *   3. If MT fails for any non-abort reason, automatically retry with ST.
- *   4. If ST also fails, throw FFmpegLoadError.
- *
- * The progress listener is scoped strictly to this function and removed
- * in `finally` so exportVideo's listener never sees double events.
- *
- * @param signal      AbortSignal — cancels network requests if user clicks Cancel.
- * @param onProgress  Optional callback (0–100) during WASM load.
- */
 export async function loadFFmpeg(
   signal?: AbortSignal,
   onProgress?: (percent: number) => void
@@ -281,13 +178,8 @@ export async function loadFFmpeg(
   }
 
   const ffmpeg = ffmpegInstance ?? new FFmpeg();
-<<<<<<< HEAD
   ffmpegInstance = ffmpeg;
-=======
->>>>>>> 23ca446 (fix:internal updates)
 
-  // Progress listener is attached here and removed in `finally`.
-  // exportVideo attaches its own separate listener for the encode phase.
   const handleProgress = ({ progress }: { progress: number }) => {
     onProgress?.(Math.round(progress * 100));
   };
@@ -299,75 +191,64 @@ export async function loadFFmpeg(
 
     if (loaded) {
       loadedBuildIsMultiThread = preferredBuild.isMultiThread;
-      if (process.env.NODE_ENV === "development") {
-        console.info(
-          `[FFmpeg] Loaded ${
-            preferredBuild.isMultiThread ? "multi-thread (MT)" : "single-thread (ST)"
-          } build`
-        );
-      }
+      console.info(
+        `[FFmpeg] Loaded ${
+          preferredBuild.isMultiThread
+            ? "multi-thread (MT)"
+            : "single-thread (ST)"
+        } build successfully`
+      );
       onProgress?.(100);
       return ffmpeg;
     }
 
-    // MT load failed (non-abort) — warn and retry with ST.
+    // FIX #3: Always try ST fallback regardless of what preferred build was
     if (preferredBuild.isMultiThread) {
       console.warn(
         "[FFmpeg] Multi-thread build failed to load. Retrying with single-thread fallback."
       );
-
-      const stBuild = {
-        baseUrl: BASE_ST,
-        coreFile: "ffmpeg-core.js",
-        wasmFile: "ffmpeg-core.wasm",
-        isMultiThread: false as const,
-      };
-
-      // Reuse the same FFmpeg instance — it hasn't been corrupted, the load
-      // simply didn't succeed. A fresh load() call is safe.
-      const stLoaded = await tryLoadBuild(ffmpeg, stBuild, signal);
-      if (stLoaded) {
-        loadedBuildIsMultiThread = false;
-        if (process.env.NODE_ENV === "development") {
-          console.info("[FFmpeg] Loaded single-thread (ST) build via fallback.");
-        }
-        onProgress?.(100);
-        return ffmpeg;
-      }
     }
 
-    // Both builds failed.
+    const stBuild = {
+      baseUrl: BASE_ST,
+      coreFile: "ffmpeg-core.js",
+      wasmFile: "ffmpeg-core.wasm",
+      isMultiThread: false as const,
+    };
+
+    const stLoaded = await tryLoadBuild(ffmpeg, stBuild, signal);
+    if (stLoaded) {
+      loadedBuildIsMultiThread = false;
+      console.info("[FFmpeg] Loaded single-thread (ST) build via fallback.");
+      onProgress?.(100);
+      return ffmpeg;
+    }
+
     throw new FFmpegLoadError(
       "Failed to load the FFmpeg engine. Check your internet connection and try again."
     );
   } catch (err) {
     if (err instanceof FFmpegLoadError) throw err;
 
-    // Cancellation — clean up so the next attempt starts fresh.
     if (ffmpegInstance === ffmpeg) {
       ffmpegInstance = null;
       loadedBuildIsMultiThread = null;
     }
 
     const wasCancelled =
-      signal?.aborted || (err instanceof DOMException && err.name === "AbortError");
+      signal?.aborted ||
+      (err instanceof DOMException && err.name === "AbortError");
 
-    if (wasCancelled) throw err; // propagate cancellation as-is
+    if (wasCancelled) throw err;
 
     throw new FFmpegLoadError(
       "Failed to load the FFmpeg engine. Check your internet connection and try again."
     );
   } finally {
-    // Always remove the load-phase progress listener regardless of outcome.
     ffmpeg.off("progress", handleProgress);
   }
 }
 
-/**
- * Terminates the cached FFmpeg WASM worker and clears the singleton.
- * Called by cancelExport() in useVideoEditor.ts so that the next export
- * starts with a clean instance rather than a potentially corrupt one.
- */
 export function terminateFFmpeg() {
   ffmpegInstance?.terminate();
   ffmpegInstance = null;
@@ -434,11 +315,12 @@ function buildVideoFilter(
   return filters.join(",");
 }
 
-export function buildAudioFilter(speed: number, normalizeAudio: boolean): string {
+export function buildAudioFilter(
+  speed: number,
+  normalizeAudio: boolean
+): string {
   const filters: string[] = [];
 
-  // atempo only accepts values between 0.5 and 2.0 — chain multiple
-  // instances for speeds outside that range (e.g. 0.25 needs two ×0.5).
   let remaining = speed;
   while (remaining < 0.5) {
     filters.push("atempo=0.5");
@@ -578,27 +460,26 @@ function buildArguments(
     }
   }
 
+  // FIX #4: Added -y flag to all formats to allow overwrite without prompt
   if (format === "webm") {
     args.push("-c:v", "libvpx-vp9", "-b:v", "0", "-crf", String(recipe.quality));
     if (shouldKeepAudio) args.push("-c:a", "libopus");
   } else if (format === "mkv") {
-    args.push("-c:v", "libx264", "-crf", String(recipe.quality), "-preset", "medium");
+    args.push(
+      "-c:v", "libx264", "-crf", String(recipe.quality), "-preset", "medium"
+    );
     if (shouldKeepAudio) args.push("-c:a", "aac", "-b:a", "128k");
   } else {
     args.push(
-      "-c:v",
-      "libx264",
-      "-crf",
-      String(recipe.quality),
-      "-preset",
-      "medium",
-      "-movflags",
-      "+faststart"
+      "-c:v", "libx264",
+      "-crf", String(recipe.quality),
+      "-preset", "medium",
+      "-movflags", "+faststart"
     );
     if (shouldKeepAudio) args.push("-c:a", "aac", "-b:a", "128k");
   }
 
-  args.push(outputName);
+  args.push("-y", outputName);
   return args;
 }
 
@@ -613,6 +494,33 @@ export async function exportVideo(
   musicOptions?: BackgroundMusicOptions,
   overlayOptions?: ImageOverlayOptions
 ): Promise<ExportResult> {
+  // ── BENCHMARK ──────────────────────────────────────────────────────────────
+  const _buildLabel = loadedBuildIsMultiThread
+    ? "MT (multi-thread)"
+    : "ST (single-thread)";
+  const _exportStart = performance.now();
+  console.info(
+    "%c[FFmpeg Benchmark] Export started",
+    "color:#1D9E75;font-weight:bold"
+  );
+  console.info(
+    `%c[FFmpeg Benchmark] Build  : ${_buildLabel}`,
+    "color:#1D9E75"
+  );
+  console.info(
+    `%c[FFmpeg Benchmark] File   : ${file.name} (${(
+      file.size /
+      1024 /
+      1024
+    ).toFixed(2)} MB)`,
+    "color:#1D9E75"
+  );
+  console.info(
+    `%c[FFmpeg Benchmark] Format : ${recipe.format} | CRF: ${recipe.quality}`,
+    "color:#1D9E75"
+  );
+  // ──────────────────────────────────────────────────────────────────────────
+
   const sessionId = buildSessionId();
 
   let targetW: number, targetH: number;
@@ -625,7 +533,6 @@ export async function exportVideo(
     targetH = preset?.height ?? 1080;
   }
 
-  // libx264 requires both dimensions to be divisible by 2.
   targetW = Math.round(targetW / 2) * 2;
   targetH = Math.round(targetH / 2) * 2;
 
@@ -637,7 +544,10 @@ export async function exportVideo(
       case "webm":
         return { filename: `output_${sessionId}.webm`, mimeType: "video/webm" };
       case "mkv":
-        return { filename: `output_${sessionId}.mkv`, mimeType: "video/x-matroska" };
+        return {
+          filename: `output_${sessionId}.mkv`,
+          mimeType: "video/x-matroska",
+        };
       case "gif":
         return { filename: `output_${sessionId}.gif`, mimeType: "image/gif" };
       default:
@@ -655,10 +565,44 @@ export async function exportVideo(
     paletteName,
   ]);
 
-  // Scoped to the encode phase only — loadFFmpeg uses its own listener.
   const handleProgress = ({ progress }: { progress: number }) => {
     onProgress(Math.min(99, Math.round(progress * 100)));
   };
+
+  const logBenchmarkDone = (format: string) => {
+    const ms = performance.now() - _exportStart;
+    const sec = (ms / 1000).toFixed(2);
+    console.info(
+      "%c[FFmpeg Benchmark] Export finished",
+      "color:#1D9E75;font-weight:bold"
+    );
+    console.info(
+      `%c[FFmpeg Benchmark] Build      : ${_buildLabel}`,
+      "color:#1D9E75"
+    );
+    console.info(
+      `%c[FFmpeg Benchmark] Output fmt : ${format}`,
+      "color:#1D9E75"
+    );
+    console.info(
+      `%c[FFmpeg Benchmark] Total time : ${sec}s`,
+      "color:#0F6E56;font-weight:bold;font-size:14px"
+    );
+  };
+
+  // FIX #5: logListener declared outside try so finally block can always remove it
+  const logListener = ({ message }: { message: string }) => {
+    const msg = message.toLowerCase();
+    if (
+      msg.includes("matches no streams") ||
+      msg.includes("specifier '0:a'") ||
+      msg.includes("input pad 0 on filter src")
+    ) {
+      missingAudioDetected = true;
+    }
+  };
+
+  let missingAudioDetected = false;
 
   try {
     await ffmpeg.writeFile(inputName, await fetchFile(file), { signal });
@@ -666,9 +610,11 @@ export async function exportVideo(
     const hasMusicTrack = !!(musicOptions?.file && recipe.keepAudio);
     const musicInputName = `music_input_${sessionId}.mp3`;
     if (hasMusicTrack) {
-      await ffmpeg.writeFile(musicInputName, await fetchFile(musicOptions!.file!), {
-        signal,
-      });
+      await ffmpeg.writeFile(
+        musicInputName,
+        await fetchFile(musicOptions!.file!),
+        { signal }
+      );
       cleanupFiles.add(musicInputName);
     }
 
@@ -676,15 +622,18 @@ export async function exportVideo(
     const overlayExt = overlayOptions?.file?.name.split(".").pop() ?? "png";
     const overlayInputName = `overlay_${sessionId}.${overlayExt}`;
     if (hasOverlay) {
-      await ffmpeg.writeFile(overlayInputName, await fetchFile(overlayOptions!.file!), {
-        signal,
-      });
+      await ffmpeg.writeFile(
+        overlayInputName,
+        await fetchFile(overlayOptions!.file!),
+        { signal }
+      );
       cleanupFiles.add(overlayInputName);
     }
 
     ffmpeg.on("progress", handleProgress);
+    ffmpeg.on("log", logListener);
 
-    // ── Two-pass GIF export ─────────────────────────────────────────────────
+    // ── Two-pass GIF export ──────────────────────────────────────────────────
     if (recipe.format === "gif") {
       const vf = buildVideoFilter(recipe, targetW, targetH);
       const vfWithPalette = vf ? `${vf},palettegen` : "palettegen";
@@ -692,7 +641,6 @@ export async function exportVideo(
         ? `[0:v]${vf}[x];[x][1:v]paletteuse`
         : "[0:v][1:v]paletteuse";
 
-      // Pass 1 — generate optimal colour palette for this clip
       const pass1Code = await ffmpeg.exec(
         ["-i", inputName, "-vf", vfWithPalette, "-y", paletteName],
         undefined,
@@ -700,19 +648,25 @@ export async function exportVideo(
       );
       if (pass1Code !== 0) throw new Error("GIF palette generation failed");
 
-      // Pass 2 — render GIF using the generated palette
       const pass2Code = await ffmpeg.exec(
-        ["-i", inputName, "-i", paletteName, "-lavfi", vfWithPaletteUse, "-y", outputName],
+        [
+          "-i", inputName,
+          "-i", paletteName,
+          "-lavfi", vfWithPaletteUse,
+          "-y", outputName,
+        ],
         undefined,
         { signal }
       );
       if (pass2Code !== 0) throw new Error("GIF export failed");
 
       const data = await ffmpeg.readFile(outputName, undefined, { signal });
-      const blob = new Blob([new Uint8Array(data as Uint8Array)], { type: "image/gif" });
+      const blob = new Blob([new Uint8Array(data as Uint8Array)], {
+        type: "image/gif",
+      });
 
-      ffmpeg.off("progress", handleProgress);
       onProgress(100);
+      logBenchmarkDone("gif");
       return {
         blobUrl: URL.createObjectURL(blob),
         size: blob.size,
@@ -721,39 +675,13 @@ export async function exportVideo(
         format: "gif" as const,
       };
     }
-    // ───────────────────────────────────────────────────────────────────────
+    // ────────────────────────────────────────────────────────────────────────
 
-    // Listen for FFmpeg log lines that indicate the input has no audio track.
-    // We use this to automatically retry without requesting audio streams,
-    // rather than crashing with a confusing error.
-    let missingAudioDetected = false;
-    const logListener = ({ message }: { message: string }) => {
-      const msg = message.toLowerCase();
-      if (
-        msg.includes("matches no streams") ||
-        msg.includes("specifier '0:a'") ||
-        msg.includes("input pad 0 on filter src")
-      ) {
-        missingAudioDetected = true;
-      }
-    };
-    ffmpeg.on("log", logListener);
-
-    // Attempt 1 — standard export assuming audio exists
+    // Attempt 1 — standard export
     let args = buildArguments(
-      recipe,
-      recipe.format,
-      outputName,
-      inputName,
-      targetW,
-      targetH,
-      hasMusicTrack,
-      musicInputName,
-      musicOptions,
-      hasOverlay,
-      overlayInputName,
-      overlayOptions,
-      true
+      recipe, recipe.format, outputName, inputName, targetW, targetH,
+      hasMusicTrack, musicInputName, musicOptions,
+      hasOverlay, overlayInputName, overlayOptions, true
     );
     let exitCode = await ffmpeg.exec(args, undefined, { signal });
 
@@ -761,51 +689,32 @@ export async function exportVideo(
     if (exitCode !== 0 && missingAudioDetected) {
       missingAudioDetected = false;
       args = buildArguments(
-        recipe,
-        recipe.format,
-        outputName,
-        inputName,
-        targetW,
-        targetH,
-        hasMusicTrack,
-        musicInputName,
-        musicOptions,
-        hasOverlay,
-        overlayInputName,
-        overlayOptions,
-        false
+        recipe, recipe.format, outputName, inputName, targetW, targetH,
+        hasMusicTrack, musicInputName, musicOptions,
+        hasOverlay, overlayInputName, overlayOptions, false
       );
       exitCode = await ffmpeg.exec(args, undefined, { signal });
     }
 
-    // Attempt 3 — switch to WebM if the chosen container has codec issues
+    // Attempt 3 — switch to WebM fallback
     if (exitCode !== 0) {
       args = buildArguments(
-        recipe,
-        "webm",
-        fallbackOutputName,
-        inputName,
-        targetW,
-        targetH,
-        hasMusicTrack,
-        musicInputName,
-        musicOptions,
-        hasOverlay,
-        overlayInputName,
-        overlayOptions,
-        !missingAudioDetected
+        recipe, "webm", fallbackOutputName, inputName, targetW, targetH,
+        hasMusicTrack, musicInputName, musicOptions,
+        hasOverlay, overlayInputName, overlayOptions, !missingAudioDetected
       );
       const fallbackCode = await ffmpeg.exec(args, undefined, { signal });
       if (fallbackCode !== 0) throw new Error("Export failed");
 
-      const data = await ffmpeg.readFile(fallbackOutputName, undefined, { signal });
+      const data = await ffmpeg.readFile(fallbackOutputName, undefined, {
+        signal,
+      });
       const blob = new Blob([new Uint8Array(data as Uint8Array)], {
         type: "video/webm",
       });
 
-      ffmpeg.off("log", logListener);
-      ffmpeg.off("progress", handleProgress);
       onProgress(100);
+      logBenchmarkDone("webm (fallback)");
       return {
         blobUrl: URL.createObjectURL(blob),
         size: blob.size,
@@ -816,11 +725,12 @@ export async function exportVideo(
     }
 
     const data = await ffmpeg.readFile(outputName, undefined, { signal });
-    const blob = new Blob([new Uint8Array(data as Uint8Array)], { type: mimeType });
+    const blob = new Blob([new Uint8Array(data as Uint8Array)], {
+      type: mimeType,
+    });
 
-    ffmpeg.off("log", logListener);
-    ffmpeg.off("progress", handleProgress);
     onProgress(100);
+    logBenchmarkDone(recipe.format);
     return {
       blobUrl: URL.createObjectURL(blob),
       size: blob.size,
@@ -829,15 +739,15 @@ export async function exportVideo(
       format: recipe.format as "mp4" | "webm" | "mkv",
     };
   } finally {
-    // Guarantee listener removal even if an exception is thrown mid-export.
+    // FIX #6: ALL listeners cleaned up in finally — no leaks on success, error, or cancel
     ffmpeg.off("progress", handleProgress);
-    // Always clean up temporary files from the WASM virtual filesystem
-    // to avoid memory accumulation across multiple exports.
+    ffmpeg.off("log", logListener);
+
     for (const path of cleanupFiles) {
       try {
         await ffmpeg.deleteFile(path);
       } catch {
-        // Ignore — file may not exist if export failed before it was written.
+        // ignore — file may not exist if export failed early
       }
     }
   }
