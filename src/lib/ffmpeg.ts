@@ -1,11 +1,6 @@
 import { FFmpeg } from "@ffmpeg/ffmpeg";
-import { fetchFile } from "@ffmpeg/util";
-import {
-  EditRecipe,
-  ExportResult,
-  BackgroundMusicOptions,
-  ImageOverlayOptions,
-} from "./types";
+import { fetchFile, toBlobURL } from "@ffmpeg/util";
+import { EditRecipe, ExportResult, BackgroundMusicOptions, ImageOverlayOptions } from "./types";
 import { getPresetById } from "./presets";
 import { simd } from "wasm-feature-detect";
 
@@ -305,8 +300,12 @@ export function buildVideoFilter(recipe: EditRecipe, targetW: number, targetH: n
   }
 
   if (recipe.speed !== 1) {
-    const pts = (1 / recipe.speed).toFixed(4);
-    filters.push(`setpts=${pts}*PTS`);
+  const pts = (1 / recipe.speed).toFixed(4);
+  filters.push(`setpts=${pts}*PTS`);
+  }
+
+  if (recipe.denoise) {
+    filters.push("hqdn3d=1.5:1.5:6:6");
   }
 
   filters.push(
@@ -670,6 +669,7 @@ export async function exportVideo(
       logBenchmarkDone("gif");
       return {
         blobUrl: URL.createObjectURL(blob),
+        blob,
         size: blob.size,
         width: targetW,
         height: targetH,
@@ -718,6 +718,7 @@ export async function exportVideo(
       logBenchmarkDone("webm (fallback)");
       return {
         blobUrl: URL.createObjectURL(blob),
+        blob,
         size: blob.size,
         width: targetW,
         height: targetH,
@@ -734,6 +735,7 @@ export async function exportVideo(
     logBenchmarkDone(recipe.format);
     return {
       blobUrl: URL.createObjectURL(blob),
+      blob,
       size: blob.size,
       width: targetW,
       height: targetH,
