@@ -271,6 +271,7 @@ function buildVideoFilter(
   targetW: number,
   targetH: number
 ): string {
+export function buildVideoFilter(recipe: EditRecipe, targetW: number, targetH: number): string {
   const filters: string[] = [];
 
   if (recipe.trimStart > 0 || recipe.trimEnd !== null) {
