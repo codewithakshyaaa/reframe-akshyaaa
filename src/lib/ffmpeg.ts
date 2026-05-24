@@ -3,29 +3,6 @@ import { fetchFile, toBlobURL } from "@ffmpeg/util";
 import { EditRecipe, ExportResult, BackgroundMusicOptions, ImageOverlayOptions } from "./types";
 import { getPresetById } from "./presets";
 import { buildTextFilter } from "./text-overlay";
-import { simd } from "wasm-feature-detect";
-
-const CORE_BASE_URL = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd";
-
-// Added from main branch for subresource security verification
-const SRI_HASHES: Record<string, string> = {
-  "ffmpeg-core.js":   "sha384-sKfkiFtvUk+vexk+0EUhEh366190/4WpgUAsUvaxEfyg7+E1Zt5Y5hrsU808g8Q9",
-  "ffmpeg-core.wasm": "sha384-U1VDhkPYrM3wTCT4/vjSpSsKqG/UjljYrYCI4hBSJ02svbCkxuCi6U6u/peg5vpW",
-};
-
-// Added from main branch to perform secure binary verification
-async function fetchWithIntegrity(url: string, mimeType: string): Promise<string> {
-  const key = url.split("/").pop()!;
-  const integrity = SRI_HASHES[key];
-
-  if (!integrity) {
-    throw new Error(`[SRI] No hash found for: ${key}`);
-  }
-
-  const res = await fetch(url, { integrity, credentials: "omit" });
-  const blob = new Blob([await res.arrayBuffer()], { type: mimeType });
-  return URL.createObjectURL(blob);
-}
 
 let ffmpegInstance: FFmpeg | null = null;
 
@@ -424,9 +401,6 @@ export async function exportVideo(
         ? `[0:v]${vf}[x];[x][1:v]paletteuse`
         : "[0:v][1:v]paletteuse";
 
-      // Add explicit output duration when speed != 1 to prevent slight duration
-      // overshoot caused by encoder/filter pipeline frame flush at stream end.
-      // Applied to both passes so palette and render are bounded identically.
       const gifDurationArgs: string[] =
         recipe.speed !== 1
           ? (() => {
