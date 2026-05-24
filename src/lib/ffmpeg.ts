@@ -25,7 +25,7 @@ export async function loadFFmpeg(
     return ffmpegInstance;
   }
 
-  const ffmpeg = ffmpegInstance ?? new FFmpeg();
+  const ffmpeg = ffmpegInstance ?? new FFmpeg({ workerLoadURL: "/ffmpeg-worker.js" });
   ffmpegInstance = ffmpeg;
 
   const handleProgress = ({ progress }: { progress: number }) => {
@@ -43,12 +43,6 @@ export async function loadFFmpeg(
     await ffmpeg.load({
       coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
       wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
-      ...(isIsolated && {
-        workerURL: await toBlobURL(
-          `${mtBase}/ffmpeg-core.worker.js`,
-          "text/javascript"
-        ),
-      }),
     }, { signal });
 
     onProgress?.(100);
