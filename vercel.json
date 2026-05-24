@@ -1,27 +1,11 @@
 {
+  "version": 2,
   "routes": [
     {
       "handle": "filesystem"
     }
   ],
   "headers": [
-    {
-      "source": "/ffmpeg/ffmpeg-core.wasm",
-      "headers": [
-        { "key": "Content-Type", "value": "application/wasm" },
-        { "key": "Cross-Origin-Opener-Policy", "value": "same-origin" },
-        { "key": "Cross-Origin-Embedder-Policy", "value": "require-corp" },
-        { "key": "Access-Control-Allow-Origin", "value": "*" }
-      ]
-    },
-    {
-      "source": "/ffmpeg/(.*)",
-      "headers": [
-        { "key": "Cross-Origin-Opener-Policy", "value": "same-origin" },
-        { "key": "Cross-Origin-Embedder-Policy", "value": "require-corp" },
-        { "key": "Access-Control-Allow-Origin", "value": "*" }
-      ]
-    },
     {
       "source": "/(.*)",
       "headers": [

@@ -6,9 +6,6 @@ import { buildTextFilter } from "./text-overlay";
 
 let ffmpegInstance: FFmpeg | null = null;
 
-/**
- * Error thrown when the FFmpeg WebAssembly core fails to load.
- */
 export class FFmpegLoadError extends Error {
   constructor(message: string) {
     super(message);
@@ -35,12 +32,12 @@ export async function loadFFmpeg(
   try {
     ffmpeg.on("progress", handleProgress);
 
-    // Stable CDN resources to remove local asset dependency entirely
-    const stBase = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm";
+    // Using the clean CDN pattern requested by mentor to keep binaries out of Git
+    const BASE_ST = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm";
 
     await ffmpeg.load({
-      coreURL: await toBlobURL(`${stBase}/ffmpeg-core.js`, "text/javascript"),
-      wasmURL: await toBlobURL(`${stBase}/ffmpeg-core.wasm`, "application/wasm"),
+      coreURL: await toBlobURL(`${BASE_ST}/ffmpeg-core.js`, "text/javascript"),
+      wasmURL: await toBlobURL(`${BASE_ST}/ffmpeg-core.wasm`, "application/wasm"),
     }, { signal });
 
     onProgress?.(100);
@@ -49,7 +46,6 @@ export async function loadFFmpeg(
     if (ffmpegInstance === ffmpeg) {
       ffmpegInstance = null;
     }
-    console.error("FFmpeg critical load error:", err);
     throw new FFmpegLoadError("Failed to load the FFmpeg engine. Check your headers or local configurations.");
   } finally {
     ffmpeg.off("progress", handleProgress);
