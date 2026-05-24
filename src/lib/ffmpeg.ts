@@ -25,7 +25,7 @@ export async function loadFFmpeg(
     return ffmpegInstance;
   }
 
-  const ffmpeg = ffmpegInstance ?? new FFmpeg({ workerLoadURL: "/ffmpeg-worker.js" });
+  const ffmpeg = ffmpegInstance ?? new FFmpeg();
   ffmpegInstance = ffmpeg;
 
   const handleProgress = ({ progress }: { progress: number }) => {
