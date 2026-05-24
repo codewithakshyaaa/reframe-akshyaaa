@@ -36,19 +36,13 @@ export async function loadFFmpeg(
     ffmpeg.on("progress", handleProgress);
 
     const isIsolated = typeof self !== "undefined" && self.crossOriginIsolated;
-    const mtBase = "https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@0.12.6/dist/esm";
+    const mtBase = "https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@0.12.6/dist/umd";
     const stBase = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm";
     const baseURL = isIsolated ? mtBase : stBase;
 
     await ffmpeg.load({
       coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
       wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
-      ...(isIsolated && {
-        workerURL: await toBlobURL(
-          `${mtBase}/ffmpeg-core.worker.js`,
-          "text/javascript"
-        ),
-      }),
     }, { signal });
 
     onProgress?.(100);
