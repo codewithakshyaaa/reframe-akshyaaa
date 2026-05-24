@@ -36,20 +36,22 @@ export async function loadFFmpeg(
     ffmpeg.on("progress", handleProgress);
 
     const isIsolated = typeof self !== "undefined" && self.crossOriginIsolated;
-    
-    // Resolve absolute path for local assets from the public/ffmpeg folder
-    const baseURL = `${typeof window !== "undefined" ? window.location.origin : ""}/ffmpeg`;
+    const baseOrigin = typeof window !== "undefined" ? window.location.origin : "";
 
     if (isIsolated) {
-      // Load multi-threaded core from local public directory
+      // Build absolute URLs to prevent Next.js bundle routing misinterpretations
+      const coreUrl = `${baseOrigin}/ffmpeg/ffmpeg-core.js`;
+      const wasmUrl = `${baseOrigin}/ffmpeg/ffmpeg-core.wasm`;
+      const workerUrl = `${baseOrigin}/ffmpeg/ffmpeg-core.worker.js`;
+
       await ffmpeg.load({
-        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
-        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
-        // @ts-ignore - Required parameter for loading core-mt web workers locally
-        workerURL: await toBlobURL(`${baseURL}/ffmpeg-core.worker.js`, "text/javascript"),
+        coreURL: await toBlobURL(coreUrl, "text/javascript"),
+        wasmURL: await toBlobURL(wasmUrl, "application/wasm"),
+        // @ts-ignore - Explicitly loads the essential web worker thread script locally
+        workerURL: await toBlobURL(workerUrl, "text/javascript"),
       }, { signal });
     } else {
-      // Single-thread fallback CDN fallback if cross-origin isolation headers fail
+      // Safe fallback option via CDN if headers fail to initialize cross-origin isolation
       const stBase = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm";
       await ffmpeg.load({
         coreURL: await toBlobURL(`${stBase}/ffmpeg-core.js`, "text/javascript"),
@@ -63,7 +65,7 @@ export async function loadFFmpeg(
     if (ffmpegInstance === ffmpeg) {
       ffmpegInstance = null;
     }
-    console.error("FFmpeg initialization failed:", err);
+    console.error("FFmpeg critical load error:", err);
     throw new FFmpegLoadError("Failed to load the FFmpeg engine. Check your headers or local configurations.");
   } finally {
     ffmpeg.off("progress", handleProgress);
@@ -203,7 +205,7 @@ function buildArguments(
 
   const args: string[] = [];
   
-  // Optimize thread pool efficiency for multi-threaded setups
+  // Set explicit core operational threads limit
   args.push("-threads", "4");
   args.push("-i", inputName);
 
@@ -394,7 +396,6 @@ export async function exportVideo(
 
     ffmpeg.on("progress", handleProgress);
 
-    // Two-pass GIF export pipeline
     if (recipe.format === "gif") {
       const vf = buildVideoFilter(recipe, targetW, targetH);
       const vfWithPalette = vf ? `${vf},palettegen` : "palettegen";
@@ -454,7 +455,6 @@ export async function exportVideo(
     };
     ffmpeg.on("log", logListener);
 
-    // Attempt 1: Process execution with standard setup
     let args = buildArguments(
       recipe, recipe.format, outputName, inputName, targetW, targetH,
       hasMusicTrack, musicInputName, musicOptions,
@@ -463,7 +463,6 @@ export async function exportVideo(
 
     let exitCode = await ffmpeg.exec(args, undefined, { signal });
 
-    // Attempt 2: Recover if input file lacks native audio streams
     if (exitCode !== 0 && missingAudioDetected) {
       missingAudioDetected = false;
       args = buildArguments(
@@ -474,7 +473,6 @@ export async function exportVideo(
       exitCode = await ffmpeg.exec(args, undefined, { signal });
     }
 
-    // Fallback Attempt 3: Compile layout container context into universal WebM container configuration
     if (exitCode !== 0) {
       args = buildArguments(
         recipe, "webm", fallbackOutputName, inputName, targetW, targetH,
