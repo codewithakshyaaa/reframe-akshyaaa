@@ -1,5 +1,5 @@
 import { FFmpeg } from "@ffmpeg/ffmpeg";
-import { fetchFile, toBlobURL } from "@ffmpeg/util";
+import { fetchFile } from "@ffmpeg/util";
 import { EditRecipe, ExportResult, BackgroundMusicOptions, ImageOverlayOptions } from "./types";
 import { getPresetById } from "./presets";
 import { buildTextFilter } from "./text-overlay";
@@ -35,29 +35,14 @@ export async function loadFFmpeg(
   try {
     ffmpeg.on("progress", handleProgress);
 
-    const isIsolated = typeof self !== "undefined" && self.crossOriginIsolated;
     const baseOrigin = typeof window !== "undefined" ? window.location.origin : "";
+    const baseURL = `${baseOrigin}/ffmpeg`;
 
-    if (isIsolated) {
-      // Build absolute URLs to prevent Next.js bundle routing misinterpretations
-      const coreUrl = `${baseOrigin}/ffmpeg/ffmpeg-core.js`;
-      const wasmUrl = `${baseOrigin}/ffmpeg/ffmpeg-core.wasm`;
-      const workerUrl = `${baseOrigin}/ffmpeg/ffmpeg-core.worker.js`;
-
-      await ffmpeg.load({
-        coreURL: await toBlobURL(coreUrl, "text/javascript"),
-        wasmURL: await toBlobURL(wasmUrl, "application/wasm"),
-        // @ts-ignore - Explicitly loads the essential web worker thread script locally
-        workerURL: await toBlobURL(workerUrl, "text/javascript"),
-      }, { signal });
-    } else {
-      // Safe fallback option via CDN if headers fail to initialize cross-origin isolation
-      const stBase = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm";
-      await ffmpeg.load({
-        coreURL: await toBlobURL(`${stBase}/ffmpeg-core.js`, "text/javascript"),
-        wasmURL: await toBlobURL(`${stBase}/ffmpeg-core.wasm`, "application/wasm"),
-      }, { signal });
-    }
+    // Direct path strings bypass the blob container routing mismatch on Vercel production environments
+    await ffmpeg.load({
+      coreURL: `${baseURL}/ffmpeg-core.js`,
+      wasmURL: `${baseURL}/ffmpeg-core.wasm`,
+    }, { signal });
 
     onProgress?.(100);
     return ffmpeg;
@@ -205,7 +190,6 @@ function buildArguments(
 
   const args: string[] = [];
   
-  // Set explicit core operational threads limit
   args.push("-threads", "4");
   args.push("-i", inputName);
 
