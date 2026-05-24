@@ -1,5 +1,5 @@
 import { FFmpeg } from "@ffmpeg/ffmpeg";
-import { fetchFile } from "@ffmpeg/util";
+import { fetchFile, toBlobURL } from "@ffmpeg/util";
 import { EditRecipe, ExportResult, BackgroundMusicOptions, ImageOverlayOptions } from "./types";
 import { getPresetById } from "./presets";
 import { buildTextFilter } from "./text-overlay";
@@ -35,13 +35,12 @@ export async function loadFFmpeg(
   try {
     ffmpeg.on("progress", handleProgress);
 
-    const baseOrigin = typeof window !== "undefined" ? window.location.origin : "";
-    const baseURL = `${baseOrigin}/ffmpeg`;
+    // Stable CDN resources to remove local asset dependency entirely
+    const stBase = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm";
 
-    // Direct path strings bypass the blob container routing mismatch on Vercel production environments
     await ffmpeg.load({
-      coreURL: `${baseURL}/ffmpeg-core.js`,
-      wasmURL: `${baseURL}/ffmpeg-core.wasm`,
+      coreURL: await toBlobURL(`${stBase}/ffmpeg-core.js`, "text/javascript"),
+      wasmURL: await toBlobURL(`${stBase}/ffmpeg-core.wasm`, "application/wasm"),
     }, { signal });
 
     onProgress?.(100);
