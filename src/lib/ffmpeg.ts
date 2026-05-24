@@ -36,14 +36,26 @@ export async function loadFFmpeg(
     ffmpeg.on("progress", handleProgress);
 
     const isIsolated = typeof self !== "undefined" && self.crossOriginIsolated;
-    const mtBase = "https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@0.12.6/dist/esm";
-    const stBase = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm";
-    const baseURL = isIsolated ? mtBase : stBase;
+    
+    // Resolve absolute path for local assets from the public/ffmpeg folder
+    const baseURL = `${typeof window !== "undefined" ? window.location.origin : ""}/ffmpeg`;
 
-    await ffmpeg.load({
-      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
-      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
-    }, { signal });
+    if (isIsolated) {
+      // Load multi-threaded core from local public directory
+      await ffmpeg.load({
+        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
+        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
+        // @ts-ignore - Required parameter for loading core-mt web workers locally
+        workerURL: await toBlobURL(`${baseURL}/ffmpeg-core.worker.js`, "text/javascript"),
+      }, { signal });
+    } else {
+      // Single-thread fallback CDN fallback if cross-origin isolation headers fail
+      const stBase = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm";
+      await ffmpeg.load({
+        coreURL: await toBlobURL(`${stBase}/ffmpeg-core.js`, "text/javascript"),
+        wasmURL: await toBlobURL(`${stBase}/ffmpeg-core.wasm`, "application/wasm"),
+      }, { signal });
+    }
 
     onProgress?.(100);
     return ffmpeg;
@@ -51,7 +63,8 @@ export async function loadFFmpeg(
     if (ffmpegInstance === ffmpeg) {
       ffmpegInstance = null;
     }
-    throw new FFmpegLoadError("Failed to load the FFmpeg engine. Check your internet connection.");
+    console.error("FFmpeg initialization failed:", err);
+    throw new FFmpegLoadError("Failed to load the FFmpeg engine. Check your headers or local configurations.");
   } finally {
     ffmpeg.off("progress", handleProgress);
   }
@@ -101,8 +114,6 @@ export function buildVideoFilter(recipe: EditRecipe, targetW: number, targetH: n
     );
   }
 
-  // Normalize timestamps only when needed — trim or speed change both
-  // require a clean 0-based timeline to produce correct output duration.
   if (recipe.trimStart > 0 || recipe.trimEnd !== null || recipe.speed !== 1) {
     filters.push("setpts=PTS-STARTPTS");
   }
@@ -127,7 +138,6 @@ export function buildVideoFilter(recipe: EditRecipe, targetW: number, targetH: n
     );
   }
 
-  // Add text overlays
   const textOverlays = recipe.textOverlays || [];
   textOverlays.forEach((overlay) => {
     filters.push(buildTextFilter(overlay, targetW, targetH));
@@ -192,7 +202,11 @@ function buildArguments(
   const overlayIdx = hasMusicTrack ? 2 : 1;
 
   const args: string[] = [];
+  
+  // Optimize thread pool efficiency for multi-threaded setups
+  args.push("-threads", "4");
   args.push("-i", inputName);
+
   if (hasMusicTrack) {
     if (musicOptions!.loopMusic) args.push("-stream_loop", "-1");
     args.push("-i", musicInputName);
@@ -289,8 +303,6 @@ function buildArguments(
     if (shouldKeepAudio) args.push("-c:a", "aac", "-b:a", "128k");
   }
 
-  // Add explicit output duration when speed != 1 to prevent slight duration
-  // overshoot caused by encoder/filter pipeline frame flush at stream end.
   if (recipe.speed !== 1) {
     const sourceDuration = (recipe.trimEnd ?? videoDuration) - recipe.trimStart;
     const outputDuration = sourceDuration / recipe.speed;
@@ -349,9 +361,6 @@ export async function exportVideo(
     onProgress(Math.min(99, Math.round(progress * 100)));
   };
 
-  // Read actual video duration via HTMLVideoElement so we can correctly
-  // compute output duration when trimEnd is null (no trim set by user).
-  // Falls back to trimEnd if metadata loading fails.
   const videoDuration = await new Promise<number>((resolve) => {
     const video = document.createElement("video");
     video.preload = "metadata";
@@ -360,8 +369,6 @@ export async function exportVideo(
       resolve(video.duration);
     };
     video.onerror = () => {
-      // Safe fallback: use trimEnd if available, otherwise 0 which
-      // will produce no -t argument and leave duration uncapped.
       resolve(recipe.trimEnd ?? 0);
     };
     video.src = URL.createObjectURL(file);
@@ -387,7 +394,7 @@ export async function exportVideo(
 
     ffmpeg.on("progress", handleProgress);
 
-    // ── Two-pass GIF export ──────────────────────────────────────────────────
+    // Two-pass GIF export pipeline
     if (recipe.format === "gif") {
       const vf = buildVideoFilter(recipe, targetW, targetH);
       const vfWithPalette = vf ? `${vf},palettegen` : "palettegen";
@@ -405,7 +412,6 @@ export async function exportVideo(
             })()
           : [];
 
-      // Pass 1: generate colour palette
       const pass1Code = await ffmpeg.exec(
         ["-i", inputName, "-vf", vfWithPalette, ...gifDurationArgs, "-y", paletteName],
         undefined,
@@ -413,7 +419,6 @@ export async function exportVideo(
       );
       if (pass1Code !== 0) throw new Error("GIF palette generation failed");
 
-      // Pass 2: render GIF using the palette
       const pass2Code = await ffmpeg.exec(
         ["-i", inputName, "-i", paletteName, "-lavfi", vfWithPaletteUse, ...gifDurationArgs, "-y", outputName],
         undefined,
@@ -435,7 +440,6 @@ export async function exportVideo(
         format: "gif" as const,
       };
     }
-    // ────────────────────────────────────────────────────────────────────────
 
     let missingAudioDetected = false;
     const logListener = ({ message }: { message: string }) => {
@@ -450,7 +454,7 @@ export async function exportVideo(
     };
     ffmpeg.on("log", logListener);
 
-    // Attempt 1: Process with standard audio streams
+    // Attempt 1: Process execution with standard setup
     let args = buildArguments(
       recipe, recipe.format, outputName, inputName, targetW, targetH,
       hasMusicTrack, musicInputName, musicOptions,
@@ -459,7 +463,7 @@ export async function exportVideo(
 
     let exitCode = await ffmpeg.exec(args, undefined, { signal });
 
-    // Attempt 2: Auto-recover if the file has no original audio track
+    // Attempt 2: Recover if input file lacks native audio streams
     if (exitCode !== 0 && missingAudioDetected) {
       missingAudioDetected = false;
       args = buildArguments(
@@ -470,7 +474,7 @@ export async function exportVideo(
       exitCode = await ffmpeg.exec(args, undefined, { signal });
     }
 
-    // Fallback Attempt 3: Switch codecs to WebM if container errors happen
+    // Fallback Attempt 3: Compile layout container context into universal WebM container configuration
     if (exitCode !== 0) {
       args = buildArguments(
         recipe, "webm", fallbackOutputName, inputName, targetW, targetH,
